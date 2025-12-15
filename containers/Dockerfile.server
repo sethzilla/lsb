@@ -1,0 +1,217 @@
+# ---------- TLS bootstrap for first apt over HTTPS ----------
+FROM alpine:3.20 AS certs
+RUN apk add --no-cache ca-certificates
+
+# ---------- builder ----------
+FROM ubuntu:24.04 AS build
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Make sure first HTTPS calls work
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+
+# Force HTTPS-only sources + robust APT options
+RUN set -eux; \
+  rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/ubuntu.sources || true; \
+  printf '%s\n' \
+    'deb https://archive.ubuntu.com/ubuntu noble main restricted universe multiverse' \
+    'deb https://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse' \
+    'deb https://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse' \
+    'deb https://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse' \
+    > /etc/apt/sources.list; \
+  printf 'Acquire::Retries "5";\nAcquire::ForceIPv4 "true";\nAcquire::Languages "none";\nAcquire::http::No-Cache "true";\nAcquire::https::No-Cache "true";\nAcquire::http::Pipeline-Depth "0";\nAcquire::CompressionTypes::Order::=gz;\n' \
+    > /etc/apt/apt.conf.d/99net; \
+  rm -rf /var/lib/apt/lists/* /var/lib/apt/lists/partial/*; \
+  apt-get update -o Acquire::CompressionTypes::Order::=gz
+
+# Build deps (+ Python & common wheels via apt)
+RUN apt-get install -y --no-install-recommends \
+      ca-certificates git curl build-essential gcc-14 g++-14 cmake make pkg-config \
+      python3 python3-pip python3-venv python3-dev \
+      python3-zmq python3-requests python3-bcrypt python3-yaml python3-colorama \
+      libluajit-5.1-dev libzmq3-dev libssl-dev zlib1g-dev libmariadb-dev binutils-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+# Harden git over HTTPS
+RUN git config --global http.version HTTP/1.1 \
+ && git config --global http.sslCAInfo /etc/ssl/certs/ca-certificates.crt \
+ && git config --global http.postBuffer 104857600 \
+ && git config --global core.compression 0
+
+# Build-time venv for tooling during build (not used in runtime)
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_DEFAULT_TIMEOUT=100 PIP_NO_CACHE_DIR=1 PIP_RETRIES=10
+RUN python3 -m venv --system-site-packages "${VIRTUAL_ENV}"
+
+WORKDIR /src
+
+# Prime Python deps (network happens here only)
+COPY tools/requirements.txt /tmp/requirements.txt
+# Replace 'zmq' with apt-provided python3-zmq
+RUN if grep -Pi '^\s*zmq(\s|$)' /tmp/requirements.txt; then \
+      sed -ri 's/^\s*zmq(\s.*)?$/# replaced by apt: python3-zmq/' /tmp/requirements.txt; \
+    fi
+
+RUN for i in 1 2 3; do \
+      "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir -r /tmp/requirements.txt && break || \
+      (echo "pip failed, retrying ($i)..." && sleep 5); \
+    done && rm -f /tmp/requirements.txt
+
+# Bring in source
+COPY . /src
+
+# Fetch CPM.cmake with retries
+RUN set -eux; \
+  for i in 1 2 3 4 5; do \
+    curl -fSL --http1.1 --tlsv1.2 --connect-timeout 20 --max-time 300 \
+      --retry 5 --retry-delay 2 --retry-all-errors \
+      https://github.com/cpm-cmake/CPM.cmake/releases/latest/download/CPM.cmake \
+      -o /src/cmake/CPM.cmake && break || sleep 3; \
+  done; \
+  test -s /src/cmake/CPM.cmake
+
+# Pre-seed nlohmann/json
+RUN set -eux; \
+  mkdir -p /deps/json; \
+  for i in 1 2 3 4 5; do \
+    curl -fSL --http1.1 --tlsv1.2 --connect-timeout 20 --max-time 600 \
+      --retry 5 --retry-delay 2 --retry-all-errors \
+      https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3 \
+      -o /tmp/json.tar.gz && break || sleep 3; \
+  done; \
+  tar -xzf /tmp/json.tar.gz -C /deps/json --strip-components=1; \
+  rm -f /tmp/json.tar.gz
+
+# Pre-seed asio
+RUN set -eux; \
+  mkdir -p /deps/asio; \
+  for i in 1 2 3 4 5; do \
+    curl -fSL --http1.1 --tlsv1.2 --connect-timeout 20 --max-time 600 \
+      --retry 5 --retry-delay 2 --retry-all-errors \
+      https://codeload.github.com/chriskohlhoff/asio/tar.gz/refs/tags/asio-1-32-0 \
+      -o /tmp/asio.tar.gz && break || sleep 3; \
+  done; \
+  tar -xzf /tmp/asio.tar.gz -C /deps/asio --strip-components=1; \
+  rm -f /tmp/asio.tar.gz
+
+# Prefer GCC 14
+ENV CC=gcc-14 CXX=g++-14
+
+# Build
+RUN mkdir -p /build && cd /build \
+ && cmake -DCMAKE_BUILD_TYPE=Release -DCPM_json_SOURCE=/deps/json -DCPM_asio_SOURCE=/deps/asio /src \
+ && cmake --build . -j"$(nproc)"
+
+# ---------- runtime ----------
+FROM ubuntu:24.04
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Trust store for first HTTPS apt
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
+# Force HTTPS-only sources + robust APT options
+RUN set -eux; \
+  rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/ubuntu.sources || true; \
+  printf '%s\n' \
+    'deb https://archive.ubuntu.com/ubuntu noble main restricted universe multiverse' \
+    'deb https://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse' \
+    'deb https://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse' \
+    'deb https://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse' \
+    > /etc/apt/sources.list; \
+  printf 'Acquire::Retries "5";\nAcquire::ForceIPv4 "true";\nAcquire::Languages "none";\nAcquire::http::No-Cache "true";\nAcquire::https::No-Cache "true";\nAcquire::http::Pipeline-Depth "0";\nAcquire::CompressionTypes::Order::=gz;\n' \
+    > /etc/apt/apt.conf.d/99net; \
+  rm -rf /var/lib/apt/lists/* /var/lib/apt/lists/partial/*; \
+  apt-get update -o Acquire::CompressionTypes::Order::=gz
+
+# --- Runtime deps ---
+# Install system Python bits and runtime libs.
+RUN apt-get install -y --no-install-recommends   \
+      ca-certificates tini bash grep sed git binutils \
+      python3 python3-venv python3-pip python3-yaml python3-git python3-zmq \
+      libluajit-5.1-2 libzmq5 libssl3 zlib1g libmariadb3 mariadb-client
+
+# Add TEMP build deps for compiling the PyPI `mariadb` wheel (provides mariadb_config + compiler)
+RUN apt-get install -y --no-install-recommends \
+      libmariadb-dev python3-dev build-essential pkg-config
+
+# Create a runtime venv and install MariaDB Python driver (avoids PEP 668)
+# Create isolated Python venv and install dependencies safely
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10 \
+    PIP_EXISTS_ACTION=w \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
+RUN python3 -m venv "${VIRTUAL_ENV}" && \
+    for i in 1 2 3 4 5; do \
+      "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir --retries=5 --timeout=120 --prefer-binary \
+        "mariadb>=1.1.7,<2" \
+        gitpython \
+        pyyaml \
+        colorama \
+      && break || (echo "pip failed (attempt $i), retrying..." && sleep 10); \
+    done
+
+# Remove TEMP build deps to slim image; keep libmariadb3 for runtime linking
+RUN apt-get purge -y libmariadb-dev python3-dev build-essential pkg-config \
+ && apt-get autoremove -y --purge \
+ && rm -rf /var/lib/apt/lists/*
+
+# Non-root user
+RUN useradd -m -u 10001 lsb
+
+# Prepare app layout + logs (make logs writable by lsb)
+WORKDIR /app/server
+RUN mkdir -p /logs && chown -R lsb:lsb /logs
+
+# Copy built tree (includes repo)
+COPY --from=build /src /app/server
+# If your build outputs separate xi_* binaries under /build, add:
+# COPY --from=build /build/xi_* /app/server/
+
+# Ensure non-root can write under /app (entrypoint edits settings + logs)
+RUN chown -R lsb:lsb /app
+
+# Keep defaults outside the mounted settings dir
+RUN cp -r /app/server/settings/default /app/server/settings.default
+
+# Make the repo “safe” for git ops and ensure dbtool sees a repo
+RUN set -eux; \
+  git config --global --add safe.directory /app/server; \
+  git -C /app/server rev-parse --is-inside-work-tree || (cd /app/server && git init -b main && git add -A && git -c user.email=ci@container -c user.name="CI Container" commit -m "snapshot" || true)
+
+# Entrypoint
+COPY containers/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Switch to non-root after files are in place
+USER lsb
+
+# App env
+ENV LSB_DB_HOST=mariadb \
+    LSB_DB_PORT=3306 \
+    LSB_DB_USER=xi \
+    LSB_DB_PASS=password \
+    LSB_DB_NAME=xidb \
+    LSB_DB_AUTOUPDATE=1 \
+    LSB_DB_UPDATE_MODE=update \
+    LSB_ZONE_IP="0.0.0.0" \
+    LSB_LOG_DIR=/logs \
+    LSB_ZMQ_IP="0.0.0.0" \
+    LSB_MAP_PORT=54232 \
+    LSB_LOGIN_DATA_IP="0.0.0.0" \
+    LSB_LOGIN_VIEW_IP="0.0.0.0" \
+    LSB_LOGIN_AUTH_IP="0.0.0.0" \
+    LSB_LOGIN_CONF_IP="0.0.0.0" \
+    LSB_TCP_ALLOW="all"
+
+EXPOSE 54230/tcp 54231/tcp 54232/tcp 54001/tcp 54002/tcp 51220/tcp 54230/udp
+ENTRYPOINT ["/usr/bin/tini","--"]
+CMD ["/entrypoint.sh"]

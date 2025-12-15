@@ -1,61 +1,37 @@
 -----------------------------------
 -- NETWORK SETTINGS
 -----------------------------------
--- All settings are attached to the `xi.settings` object. This is published globally, and be accessed from C++ and any script.
---
--- This file is concerned mainly with networking between the database, client, and server executables.
------------------------------------
 
 xi = xi or {}
 xi.settings = xi.settings or {}
 
 xi.settings.network =
 {
-    SQL_HOST     = '127.0.0.1',
+    SQL_HOST     = "mariadb",
     SQL_PORT     = 3306,
-    SQL_LOGIN    = 'root',
-    SQL_PASSWORD = 'root',
-    SQL_DATABASE = 'xidb',
+    SQL_LOGIN    = "xi",
+    SQL_PASSWORD = "password",
+    SQL_DATABASE = "xidb",
 
-    LOGIN_DATA_IP   = '0.0.0.0',
+    LOGIN_DATA_IP   = "127.0.0.1",
     LOGIN_DATA_PORT = 54230,
-    LOGIN_VIEW_IP   = '0.0.0.0',
+    LOGIN_VIEW_IP   = "127.0.0.1",
     LOGIN_VIEW_PORT = 54001,
-    LOGIN_AUTH_IP   = '0.0.0.0',
+    LOGIN_AUTH_IP   = "127.0.0.1",
     LOGIN_AUTH_PORT = 54231,
-    LOGIN_CONF_IP   = '0.0.0.0',
+    LOGIN_CONF_IP   = "127.0.0.1",
     LOGIN_CONF_PORT = 51220,
 
-    MAP_PORT = 54230,
+    MAP_PORT = 54232,
 
     SEARCH_PORT = 54002,
 
     -- DB queries will attempt each query once, and reconnect and retry up to `SQL_QUERY_RETRY_COUNT` times.
     SQL_QUERY_RETRY_COUNT = 1,
 
-    ENABLE_HTTP = false,
-    HTTP_HOST   = 'localhost',
-    HTTP_PORT   = 8088,
-
-    -- Central message server settings
-    ZMQ_TRANSPORT = 'tcp',
-    ZMQ_IP        = '127.0.0.1',
-    ZMQ_PORT      = 54003,
-
-    -- Minimum milliseconds between two handled copies of the same packet from one player.
-    PACKET_RATE_LIMITS =
-    {
-        GP_CLI_COMMAND_SUBCONTAINER    = 1000, -- Mannequin Equip
-        GP_CLI_COMMAND_MOTION          = 1000, -- Emotes
-        GP_CLI_COMMAND_SHOP_BUY        = 250,  -- Vendor Shop Purchase
-        GP_CLI_COMMAND_GUILD_BUY       = 250,  -- Guild Shop Purchase
-        GP_CLI_COMMAND_ASSIST_CHANNEL  = 1000, -- Assist Channel
-        GP_CLI_COMMAND_TRACKING_LIST   = 1000, -- Wide Scan
-        GP_CLI_COMMAND_TRACKING_START  = 1000, -- Wide Scan Track
-        GP_CLI_COMMAND_MASTERY_DISPLAY = 2000, -- Set Job Master Display
-        GP_CLI_COMMAND_JUMP            = 2000, -- Jump
-        GP_CLI_COMMAND_SUBMAPCHANGE    = 200,  -- Sub-area change
-    },
+    -- Central message server settings (ensure these are the same on both all map servers and the central (lobby) server
+    ZMQ_IP   = "127.0.0.1",
+    ZMQ_PORT = 54003,
 
     -- ===========================
     -- NOTE: The settings that follow will not necessarily need to be modified
@@ -94,9 +70,9 @@ xi.settings.network =
     --   allow,deny     : Checks allow rules, then deny rules. Allows if no rules match.
     --   mutual-failure : Allows only if an allow rule matches and no deny rules match.
     -- (default is deny,allow)
-    TCP_ORDER = 'deny,allow',
-    --TCP_ORDER = 'allow,deny',
-    --TCP_ORDER = 'mutual-failure',
+    TCP_ORDER = "deny,allow",
+    --TCP_ORDER = "allow,deny",
+    --TCP_ORDER = "mutual-failure",
 
     -- ===========================
     -- IP rules
@@ -106,17 +82,17 @@ xi.settings.network =
     -- The rules are processed in order, the first matching rule of each list
     -- (allow and deny) is used
 
-    TCP_ALLOW = '',
-    --TCP_ALLOW = '127.0.0.1,192.168.0.0/16',
-    --TCP_ALLOW = '127.0.0.1'
-    --TCP_ALLOW = '192.168.0.0/16'
-    --TCP_ALLOW = '10.0.0.0/255.0.0.0'
-    --TCP_ALLOW = 'all'
+    TCP_ALLOW = "all",
+    --TCP_ALLOW = "127.0.0.1,192.168.0.0/16",
+    --TCP_ALLOW = "127.0.0.1"
+    --TCP_ALLOW = "192.168.0.0/16"
+    --TCP_ALLOW = "10.0.0.0/255.0.0.0"
+    --TCP_ALLOW = "all"
 
-    TCP_DENY = '',
-    --TCP_DENY = '10.0.0.0/8,192.168.0.0/16',
-    --TCP_DENY = '127.0.0.1',
-    --TCP_DENY = '10.0.0.0/255.0.0.0',
+    TCP_DENY = "",
+    --TCP_DENY = "10.0.0.0/8,192.168.0.0/16",
+    --TCP_DENY = "127.0.0.1",
+    --TCP_DENY = "10.0.0.0/255.0.0.0",
 
     -- ===========================
     -- Connection Limit Settings

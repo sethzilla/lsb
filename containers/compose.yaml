@@ -1,0 +1,80 @@
+services:
+  mariadb:
+    image: mariadb:10.6
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpw
+      MARIADB_DATABASE: xidb
+      MARIADB_USER: xi
+      MARIADB_PASSWORD: password
+      MARIADB_CHARACTER_SET_SERVER: utf8mb4
+      MARIADB_COLLATION_SERVER: utf8mb4_general_ci
+    volumes:
+      - dbdata:/var/lib/mysql
+      # IMPORTANT: compose.yaml is already in ./containers, so the file is ./init-user.sql here
+      - ./init-user.sql:/docker-entrypoint-initdb.d/init-user.sql:ro
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "-uroot", "-prootpw"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  lsb:
+    hostname: DESKTOP-7IKJTG6
+    networks:
+      default:
+        aliases:
+          - ffxi00.pol.com
+          - pp000.pol.com
+          - DESKTOP-7IKJTG6
+    extra_hosts:
+      - "DESKTOP-7IKJTG6:127.0.0.1"
+      - "ffxi00.pol.com:127.0.0.1"
+      - "pp000.pol.com:127.0.0.1"
+      - "localhost:127.0.0.1"
+    build:
+      context: ..
+      dockerfile: containers/Dockerfile.server
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      # consumed by entrypoint.sh (these names match what it reads)
+      LSB_DB_HOST: mariadb
+      LSB_DB_PORT: "3306"
+      LSB_DB_NAME: xidb
+      LSB_DB_USER: xi
+      LSB_DB_PASS: password
+      LSB_DB_AUTOUPDATE: "1"
+      LSB_DB_UPDATE_MODE: "update"
+      LSB_LOG_DIR: /logs
+      # IMPORTANT: zoneip must be a real IP the client can connect to, NOT 0.0.0.0
+      # For local play (same machine), use 127.0.0.1
+      LSB_ZONE_IP: "127.0.0.1"
+      LSB_ZMQ_IP: "0.0.0.0"
+      LSB_MAP_PORT: "54232"
+      LSB_LOGIN_DATA_IP: "0.0.0.0"
+      LSB_LOGIN_VIEW_IP: "0.0.0.0"
+      LSB_LOGIN_AUTH_IP: "0.0.0.0"
+      LSB_LOGIN_CONF_IP: "0.0.0.0"
+      LSB_TCP_ALLOW: "all"
+    volumes:
+      - lsb-config:/app/server/settings
+      - lsb-logs:/logs
+      - lsb-cert:/app/server/cert
+    ports:
+      - "54001:54001"
+      - "54002:54002"
+      - "54230:54230"
+      - "54231:54231"
+      - "51220:51220"
+      - "54232:54232"
+      - "54230:54230/udp"
+
+
+volumes:
+  dbdata: {}
+  lsb-config: {}
+  lsb-logs: {}
+  lsb-cert: {}

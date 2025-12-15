@@ -1,0 +1,9 @@
+# Clean up stuff
+docker container prune -f \
+&& docker image prune -f \
+&& docker builder prune -f \
+&& docker network prune -f
+
+
+# Shrink vhdx back down
+Optimize-VHD -Path "C:\Users\Seth\AppData\Local\Packages\CanonicalGroupLimited.Ubuntu_79rhkp1fndgsc\LocalState\ext4.vhdx"
